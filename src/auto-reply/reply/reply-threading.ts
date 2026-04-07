@@ -78,25 +78,18 @@ export function resolveReplyToMode(
   return resolveConfiguredReplyToMode(cfg, channel, chatType);
 }
 
-export function createReplyToModeFilter(
-  mode: ReplyToMode,
-  opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
-) {
+export function createReplyToModeFilter(mode: ReplyToMode) {
   let hasThreaded = false;
   return (payload: ReplyPayload): ReplyPayload => {
+    if (mode === "auto") {
+      // "auto" should be resolved to "off", "first", or "all" before reaching
+      // the filter.  If it leaks through unresolved, default to "off" (no quoting).
+      return { ...payload, replyToId: undefined };
+    }
     if (!payload.replyToId) {
       return payload;
     }
     if (mode === "off") {
-      const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
-      // Compaction notices must never be threaded when replyToMode=off — even
-      // if they carry explicit reply tags (replyToCurrent).  Honouring the
-      // explicit tag here would make status notices appear in-thread while
-      // normal assistant replies stay off-thread, contradicting the off-mode
-      // expectation.  Strip replyToId unconditionally for compaction payloads.
-      if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !payload.isCompactionNotice) {
-        return payload;
-      }
       return { ...payload, replyToId: undefined };
     }
     if (mode === "all") {
@@ -150,14 +143,7 @@ export function resolveBatchedReplyThreadingPolicy(
 
 export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
-  channel?: OriginatingChannelType,
+  _channel?: OriginatingChannelType,
 ) {
-  const normalized = normalizeOptionalLowercaseString(channel);
-  const isWebchat = normalized === "webchat";
-  // Default: allow explicit reply tags/directives even when replyToMode is "off".
-  // Unknown channels fail closed; internal webchat stays allowed.
-  const allowExplicitReplyTagsWhenOff = normalized ? true : isWebchat;
-  return createReplyToModeFilter(mode, {
-    allowExplicitReplyTagsWhenOff,
-  });
+  return createReplyToModeFilter(mode);
 }
