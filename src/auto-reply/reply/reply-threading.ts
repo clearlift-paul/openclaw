@@ -1,4 +1,7 @@
-import { normalizeChannelId as normalizePluginChannelId } from "../../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId as normalizePluginChannelId,
+} from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ReplyToMode } from "../../config/types.js";
@@ -78,7 +81,10 @@ export function resolveReplyToMode(
   return resolveConfiguredReplyToMode(cfg, channel, chatType);
 }
 
-export function createReplyToModeFilter(mode: ReplyToMode) {
+export function createReplyToModeFilter(
+  mode: ReplyToMode,
+  opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
+) {
   let hasThreaded = false;
   return (payload: ReplyPayload): ReplyPayload => {
     if (mode === "auto") {
@@ -90,6 +96,10 @@ export function createReplyToModeFilter(mode: ReplyToMode) {
       return payload;
     }
     if (mode === "off") {
+      const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
+      if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !payload.isCompactionNotice) {
+        return payload;
+      }
       return { ...payload, replyToId: undefined };
     }
     if (mode === "all") {
@@ -143,7 +153,15 @@ export function resolveBatchedReplyThreadingPolicy(
 
 export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
-  _channel?: OriginatingChannelType,
+  channel?: OriginatingChannelType,
 ) {
-  return createReplyToModeFilter(mode);
+  const normalized = normalizePluginChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
+  const threading = normalized ? getChannelPlugin(normalized)?.threading : undefined;
+  const resolvedAllowExplicitReplyTagsWhenOff =
+    threading?.allowExplicitReplyTagsWhenOff ?? threading?.allowTagsWhenOff;
+  const allowExplicitReplyTagsWhenOff =
+    resolvedAllowExplicitReplyTagsWhenOff ?? (normalized === "slack" ? false : Boolean(normalized));
+  return createReplyToModeFilter(mode, {
+    allowExplicitReplyTagsWhenOff,
+  });
 }

@@ -188,4 +188,67 @@ describe("createInboundDebouncer onEnrich", () => {
       setTimeoutSpy.mockRestore();
     }
   });
+
+  it("reports batched onEnrich failures through onError without rejecting the flush", async () => {
+    vi.useFakeTimers();
+    const onFlush = vi.fn(async () => {});
+    const onError = vi.fn();
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onEnrich: () => {
+        throw new Error("batched enrich failed");
+      },
+      onFlush,
+      onError,
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1" });
+      await debouncer.enqueue({ key: "a", id: "2" });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(onFlush).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect(onError.mock.calls[0]?.[1]).toEqual([
+        { key: "a", id: "1" },
+        { key: "a", id: "2" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports queued onEnrich failures through onError without rejecting enqueue", async () => {
+    const onFlush = vi.fn(async (items: Array<{ key: string; id: string; debounce: boolean }>) => {
+      if (items[0]?.id === "1") {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+    });
+    const onError = vi.fn();
+    const onEnrich = vi.fn((item: { key: string; id: string; debounce: boolean }) => {
+      if (item.id === "2") {
+        throw new Error("queued enrich failed");
+      }
+      return item;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string; debounce: boolean }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      shouldDebounce: (item) => item.debounce,
+      onEnrich,
+      onFlush,
+      onError,
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1", debounce: true });
+    const second = debouncer.enqueue({ key: "a", id: "2", debounce: false });
+    await expect(second).resolves.toBeUndefined();
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect(onError.mock.calls[0]?.[1]).toEqual([{ key: "a", id: "2", debounce: false }]);
+  });
 });

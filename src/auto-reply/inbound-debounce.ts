@@ -72,20 +72,47 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return Math.max(0, Math.trunc(resolved));
   };
 
-  const runFlush = async (items: T[]) => {
-    const enrichedItems =
-      params.onEnrich && items.length > 1
-        ? items.map((item) => params.onEnrich!(item, "batched"))
-        : items;
+  const reportError = (err: unknown, items: T[]) => {
     try {
+      params.onError?.(err, items);
+    } catch {
+      // Flush failures are reported via onError, but this helper stays
+      // non-throwing so keyed chains can continue processing later items.
+    }
+  };
+
+  const tryEnrichItem = (
+    item: T,
+    reason: InboundEnrichReason,
+  ): { ok: true; item: T } | { ok: false; error: unknown } => {
+    if (!params.onEnrich) {
+      return { ok: true, item };
+    }
+    try {
+      return { ok: true, item: params.onEnrich(item, reason) };
+    } catch (err) {
+      return { ok: false, error: err };
+    }
+  };
+
+  const runFlush = async (items: T[]) => {
+    let enrichedItems = items;
+    try {
+      if (params.onEnrich && items.length > 1) {
+        const nextItems: T[] = [];
+        for (const item of items) {
+          const enriched = tryEnrichItem(item, "batched");
+          if (!enriched.ok) {
+            reportError(enriched.error, items);
+            return;
+          }
+          nextItems.push(enriched.item);
+        }
+        enrichedItems = nextItems;
+      }
       await params.onFlush(enrichedItems);
     } catch (err) {
-      try {
-        params.onError?.(err, enrichedItems);
-      } catch {
-        // Flush failures are reported via onError, but this helper stays
-        // non-throwing so keyed chains can continue processing later items.
-      }
+      reportError(err, enrichedItems);
     }
   };
 
@@ -179,7 +206,12 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       if (key) {
         if (buffers.has(key)) {
           if (params.onEnrich && keyChains.has(key)) {
-            item = params.onEnrich(item, "queued");
+            const enriched = tryEnrichItem(item, "queued");
+            if (!enriched.ok) {
+              reportError(enriched.error, [item]);
+              return;
+            }
+            item = enriched.item;
           }
           // Reserve the keyed immediate slot before forcing the pending buffer
           // to flush so fire-and-forget callers cannot be overtaken.
@@ -196,7 +228,12 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
         }
         if (keyChains.has(key)) {
           if (params.onEnrich) {
-            item = params.onEnrich(item, "queued");
+            const enriched = tryEnrichItem(item, "queued");
+            if (!enriched.ok) {
+              reportError(enriched.error, [item]);
+              return;
+            }
+            item = enriched.item;
           }
           await enqueueKeyTask(key, async () => {
             await runFlush([item]);
