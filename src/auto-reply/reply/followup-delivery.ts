@@ -10,13 +10,13 @@ import {
   resolveOriginMessageProvider,
   resolveOriginMessageTo,
 } from "./origin-routing.js";
+import { shouldSuppressReasoningPayload } from "./reply-payloads-base.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
-import { shouldSuppressReasoningPayload } from "./reply-payloads-base.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 
 export function resolveFollowupDeliveryPayloads(params: {
@@ -61,7 +61,7 @@ export function resolveFollowupDeliveryPayloads(params: {
   let didMultiTagSplit = false;
   const multiTagPayloads = nonReasoningPayloads.flatMap((payload) => {
     const text = payload.text;
-    if (!text || !text.includes("[[reply_to")) {
+    if (!text || !text.includes("[[")) {
       return [payload];
     }
     const segments = splitByReplyToTags(text);
